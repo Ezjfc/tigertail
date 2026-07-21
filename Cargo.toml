@@ -3,7 +3,7 @@ name = "chiral"
 version = "0.1.0"
 edition = "2021"
 description = "Use a reMarkable 2 as a drawing tablet on Wayland"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_12"] }
