@@ -37,6 +37,11 @@ rustPlatform.buildRustPackage {
 
   buildAndTestSubdir = "crates/tigertaild";
 
+  postInstall = ''
+    install -Dm644 ../data/tigertaild.service "$out/lib/systemd/system/tigertaild.service"
+    install -Dm644 ../tigertail.toml.example "$out/share/tigertail/tigertail.toml.example"
+  '';
+
   # armv7 test binaries can't run on the build machine; qemu-based checks
   # happen in the devShell instead.
   doCheck = false;

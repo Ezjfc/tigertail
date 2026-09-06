@@ -1,0 +1,24 @@
+# tigertaild configuration — lives at /home/root/tigertail/tigertail.toml on
+# the tablet (survives OS updates). Apply changes with:
+#   systemctl restart tigertaild
+# Every key is optional; CLI flags override these values.
+
+# Pen evdev node. Defaults to the detected device profile's.
+#pen_device = "/dev/input/event1"
+
+# Grab the pen exclusively so xochitl stops drawing while forwarding.
+grab_input = true
+
+# Host screen orientation relative to the tablet held with buttons at top:
+# portrait, landscape-right, landscape-left, inverted.
+orientation = "landscape-right"
+
+# How the pen area maps onto the host: fill (stretch), contain (letterbox),
+# cover (crop). contain/cover need aspect_ratio or resolution.
+fit = "fill"
+#aspect_ratio = "16:9"
+#resolution = "1920x1080"
+
+# Hover-cursor vs. ink offset correction: off, tilt, tilt-distance.
+tilt_correction = "off"
+#tilt_correction_gain = 1.0

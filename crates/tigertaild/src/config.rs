@@ -145,10 +145,16 @@ impl Config {
 }
 
 fn load_from_path(path: &Path) -> Option<FileConfig> {
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) => {
+            log::info!("No config at {} ({}); using defaults", path.display(), e);
+            return None;
+        }
+    };
     match toml::from_str(&content) {
         Ok(config) => {
-            log::debug!("Loaded config from {}", path.display());
+            log::info!("Loaded config from {}", path.display());
             Some(config)
         }
         Err(e) => {

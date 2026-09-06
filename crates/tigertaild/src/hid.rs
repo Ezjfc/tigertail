@@ -15,15 +15,26 @@
 //!
 //! Every field is standard HID digitizer usage, so Windows/Linux/macOS bind
 //! their in-box pen drivers with no host-side software.
+//!
+//! X/Y carry physical extents (Unit = cm, exponent -1 → mm) so the host
+//! kernel derives a non-zero resolution; libinput refuses tablets without a
+//! physical size, which is the same reason rm-pad sets a resolution on its
+//! uinput device.
 
 use crate::pen::{PenFrame, PenGeometry};
 
 pub const REPORT_LEN: usize = 9;
 
+/// Pen digitizer units per millimetre. The rM2 area (20967×15725 units over
+/// ~210×158 mm) works out to ~100/mm, so the physical extent is `max / 100`.
+const UNITS_PER_MM: i32 = 100;
+
 /// Build the report descriptor for the given (transformed) pen geometry.
 pub fn report_descriptor(geo: &PenGeometry) -> Vec<u8> {
     let x_max = geo.x_max as u16;
     let y_max = geo.y_max as u16;
+    let x_mm = (geo.x_max / UNITS_PER_MM).max(1) as u16;
+    let y_mm = (geo.y_max / UNITS_PER_MM).max(1) as u16;
     let pressure_max = geo.pressure_max as u16;
     // Device tilt units are centidegrees on every supported model; HID wants
     // plain degrees.
@@ -53,17 +64,27 @@ pub fn report_descriptor(geo: &PenGeometry) -> Vec<u8> {
         0x15, 0x00, //     Logical Minimum (0)
     ];
     d.extend_from_slice(&[0x26, x_max as u8, (x_max >> 8) as u8]); // Logical Maximum (x_max)
+    d.extend_from_slice(&[0x35, 0x00]); //                            Physical Minimum (0)
+    d.extend_from_slice(&[0x46, x_mm as u8, (x_mm >> 8) as u8]); //   Physical Maximum (x_mm)
     d.extend_from_slice(&[
+        0x65, 0x11, //     Unit (SI linear: centimetre)
+        0x55, 0x0F, //     Unit Exponent (-1) → millimetres
         0x75, 0x10, //     Report Size (16)
         0x95, 0x01, //     Report Count (1)
         0x81, 0x02, //     Input (Data,Var,Abs)
         0x09, 0x31, //     Usage (Y)
     ]);
     d.extend_from_slice(&[0x26, y_max as u8, (y_max >> 8) as u8]); // Logical Maximum (y_max)
+    d.extend_from_slice(&[0x46, y_mm as u8, (y_mm >> 8) as u8]); //   Physical Maximum (y_mm)
     d.extend_from_slice(&[
         0x75, 0x10, //     Report Size (16)
         0x95, 0x01, //     Report Count (1)
         0x81, 0x02, //     Input (Data,Var,Abs)
+        // Physical range and unit are global items: clear them so pressure
+        // is unitless again.
+        0x45, 0x00, //     Physical Maximum (0)
+        0x65, 0x00, //     Unit (none)
+        0x55, 0x00, //     Unit Exponent (0)
         0x05, 0x0D, //     Usage Page (Digitizers)
         0x09, 0x30, //     Usage (Tip Pressure)
     ]);
@@ -79,6 +100,12 @@ pub fn report_descriptor(geo: &PenGeometry) -> Vec<u8> {
         (-(tilt_deg as i8)) as u8, // Logical Minimum (-tilt_deg)
         0x25,
         tilt_deg, //           Logical Maximum (tilt_deg)
+        0x35,
+        (-(tilt_deg as i8)) as u8, // Physical Minimum (-tilt_deg)
+        0x45,
+        tilt_deg, //           Physical Maximum (tilt_deg)
+        0x65,
+        0x14, //               Unit (English rotation: degrees)
         0x75,
         0x08, //               Report Size (8)
         0x95,
@@ -158,6 +185,19 @@ mod tests {
         assert!(d.windows(3).any(|w| w == [0x26, 0xFF, 0x0F]));
         // rM2 tilt range 6400 centidegrees -> ±64°.
         assert!(d.windows(2).any(|w| w == [0x25, 64]));
+    }
+
+    #[test]
+    fn descriptor_gives_xy_a_physical_size_in_mm() {
+        let d = report_descriptor(&geo());
+        // 20967/100 = 209 mm, 15725/100 = 157 mm, unit cm with exponent -1.
+        assert!(d.windows(3).any(|w| w == [0x46, 209, 0]));
+        assert!(d.windows(3).any(|w| w == [0x46, 157, 0]));
+        assert!(d.windows(4).any(|w| w == [0x65, 0x11, 0x55, 0x0F]));
+        // …and the unit is cleared again before pressure.
+        let pressure = d.windows(4).position(|w| w == [0x05, 0x0D, 0x09, 0x30]).unwrap();
+        let clear = d.windows(2).position(|w| w == [0x65, 0x00]).unwrap();
+        assert!(clear < pressure);
     }
 
     #[test]

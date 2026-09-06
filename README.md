@@ -49,8 +49,11 @@ tigertaild --help          # orientation, fit, tilt-correction options
 ```
 
 Options mirror rm-pad: `--orientation`, `--fit contain --aspect-ratio 16:9`,
-`--tilt-correction tilt-distance`, `--no-grab-input`, or the same keys in
-`/etc/tigertail.toml`.
+`--tilt-correction tilt-distance`, `--no-grab-input`. The systemd unit reads
+the same keys from **`/home/root/tigertail/tigertail.toml`** (seeded from
+`tigertail.toml.example` on first deploy; survives OS updates). That file is
+the settings store tigertail-ui will manage; apply edits with
+`systemctl restart tigertaild`.
 
 Note: attaching/detaching the gadget re-enumerates the USB link, so an SSH
 session over USB blips for a few seconds. The daemon restores the stock

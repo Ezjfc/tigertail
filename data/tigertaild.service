@@ -3,7 +3,9 @@ Description=tigertail USB HID pen daemon
 After=multi-user.target
 
 [Service]
-ExecStart=/home/root/tigertail/tigertaild
+# The config file is the daemon's single source of settings; tigertail-ui
+# will edit it and `systemctl restart tigertaild` to apply.
+ExecStart=/home/root/tigertail/tigertaild --config /home/root/tigertail/tigertail.toml
 Restart=on-failure
 RestartSec=2
 
