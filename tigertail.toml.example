@@ -22,3 +22,10 @@ fit = "fill"
 # Hover-cursor vs. ink offset correction: off, tilt, tilt-distance.
 tilt_correction = "off"
 #tilt_correction_gain = 1.0
+
+# USB strings shown to the host while the pen is attached. They name the
+# input device ("<manufacturer> <product>") but are gadget-wide, so the
+# USB-ethernet adapter is renamed too. Stock values return on exit; Windows
+# may keep showing a cached name until the device is forgotten.
+#usb_product = "tigertail"
+#usb_manufacturer = "reMarkable"

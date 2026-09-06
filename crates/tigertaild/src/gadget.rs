@@ -145,6 +145,14 @@ fn umount(mnt: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Gadget-wide USB descriptor strings to present while attached. `None`
+/// keeps the stock value.
+#[derive(Debug, Clone, Default)]
+pub struct UsbStrings {
+    pub product: Option<String>,
+    pub manufacturer: Option<String>,
+}
+
 /// The mutated gadget state; `Drop` restores the stock tree.
 struct HidGadget {
     gadget: PathBuf,
@@ -152,12 +160,14 @@ struct HidGadget {
     mnt: PathBuf,
     links: Vec<PathBuf>,
     udc: String,
+    /// (attribute path, stock value) for every USB string we overwrote.
+    saved_strings: Vec<(PathBuf, String)>,
 }
 
 impl HidGadget {
     /// Perform steps 1-4 (function, functionfs, descriptors, config links,
     /// UDC rebind) and return the gadget together with the open ep0.
-    fn set_up(report_desc_len: u16) -> Result<(Self, File)> {
+    fn set_up(report_desc_len: u16, strings: &UsbStrings) -> Result<(Self, File)> {
         let gadget = PathBuf::from(GADGET_DIR);
         if !gadget.is_dir() {
             return Err(format!("gadget dir {} not found", gadget.display()).into());
@@ -182,6 +192,7 @@ impl HidGadget {
             links: Vec::new(),
             udc,
             gadget,
+            saved_strings: Vec::new(),
         };
 
         this.clean_stale();
@@ -202,6 +213,7 @@ impl HidGadget {
         // USB-ethernet for a few seconds.
         log::warn!("Re-binding UDC: the USB link (including SSH over 10.11.99.1) will blip");
         this.write_udc("\n")?;
+        this.apply_strings(strings)?;
         for config in ["configs/c.1", "configs/c.2"] {
             let link = this.gadget.join(config).join(format!("ffs.{}", INSTANCE));
             symlink(&this.func_dir, &link)?;
@@ -216,6 +228,26 @@ impl HidGadget {
     fn write_udc(&self, value: &str) -> Result<()> {
         fs::write(self.gadget.join("UDC"), value)
             .map_err(|e| format!("writing UDC {:?}: {}", value.trim(), e).into())
+    }
+
+    /// Overwrite the gadget's product/manufacturer strings (while unbound),
+    /// remembering the stock values for teardown. The host derives the HID
+    /// input device name from these, so this is how the tablet gets renamed.
+    fn apply_strings(&mut self, strings: &UsbStrings) -> Result<()> {
+        let dir = self.gadget.join("strings/0x409");
+        for (attr, value) in [
+            ("product", &strings.product),
+            ("manufacturer", &strings.manufacturer),
+        ] {
+            let Some(value) = value else { continue };
+            let path = dir.join(attr);
+            let stock = fs::read_to_string(&path)?;
+            fs::write(&path, value)
+                .map_err(|e| format!("writing USB {} string: {}", attr, e))?;
+            log::info!("USB {} string: {:?} -> {:?}", attr, stock.trim(), value);
+            self.saved_strings.push((path, stock));
+        }
+        Ok(())
     }
 
     /// Best-effort removal of leftovers from a crashed previous run.
@@ -247,6 +279,11 @@ impl Drop for HidGadget {
         let _ = self.write_udc("\n");
         for link in &self.links {
             let _ = fs::remove_file(link);
+        }
+        for (path, stock) in &self.saved_strings {
+            if let Err(e) = fs::write(path, stock) {
+                log::warn!("Failed to restore {}: {}", path.display(), e);
+            }
         }
         if let Err(e) = self.write_udc(&self.udc.clone()) {
             log::warn!("Failed to re-bind stock gadget: {}", e);
@@ -377,6 +414,7 @@ fn handle_setup(
 
 /// [`PenSink`] that turns pen frames into HID input reports on ep1.
 pub struct HidSink {
+    strings: UsbStrings,
     state: Option<Active>,
 }
 
@@ -390,15 +428,15 @@ struct Active {
 }
 
 impl HidSink {
-    pub fn new() -> Self {
-        Self { state: None }
+    pub fn new(strings: UsbStrings) -> Self {
+        Self { strings, state: None }
     }
 }
 
 impl PenSink for HidSink {
     fn begin(&mut self, geometry: &PenGeometry) -> Result<()> {
         let report_descriptor = hid::report_descriptor(geometry);
-        let (gadget, ep0) = HidGadget::set_up(report_descriptor.len() as u16)?;
+        let (gadget, ep0) = HidGadget::set_up(report_descriptor.len() as u16, &self.strings)?;
 
         let shared = Arc::new(Shared {
             enabled: AtomicBool::new(false),

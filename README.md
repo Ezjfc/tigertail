@@ -49,7 +49,8 @@ tigertaild --help          # orientation, fit, tilt-correction options
 ```
 
 Options mirror rm-pad: `--orientation`, `--fit contain --aspect-ratio 16:9`,
-`--tilt-correction tilt-distance`, `--no-grab-input`. The systemd unit reads
+`--tilt-correction tilt-distance`, `--no-grab-input`, `--usb-product "..."`
+(renames the device the host sees; stock name restored on exit). The systemd unit reads
 the same keys from **`/home/root/tigertail/tigertail.toml`** (seeded from
 `tigertail.toml.example` on first deploy; survives OS updates). That file is
 the settings store tigertail-ui will manage; apply edits with

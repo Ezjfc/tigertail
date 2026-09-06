@@ -36,7 +36,10 @@ fn main() -> Result<()> {
         },
         None => {
             install_signal_handlers();
-            let mut sink = gadget::HidSink::new();
+            let mut sink = gadget::HidSink::new(gadget::UsbStrings {
+                product: config.usb_product.clone(),
+                manufacturer: config.usb_manufacturer.clone(),
+            });
             match pen::run(&config, device, &mut sink) {
                 // A signal interrupting the evdev read is the clean shutdown
                 // path; the sink's Drop restores the stock gadget.

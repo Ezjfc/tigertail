@@ -60,6 +60,15 @@ pub struct Cli {
     #[arg(long)]
     pub tilt_correction_gain: Option<f64>,
 
+    /// USB product string the host sees (also names the input device and the
+    /// USB-ethernet adapter). Stock value is restored on exit.
+    #[arg(long)]
+    pub usb_product: Option<String>,
+
+    /// USB manufacturer string the host sees. Stock value is restored on exit.
+    #[arg(long)]
+    pub usb_manufacturer: Option<String>,
+
     /// Path to config file
     #[arg(long, env = "TIGERTAIL_CONFIG")]
     pub config: Option<PathBuf>,
@@ -85,6 +94,8 @@ pub struct FileConfig {
     pub fit: FitMode,
     pub aspect_ratio: Option<AspectRatio>,
     pub resolution: Option<Resolution>,
+    pub usb_product: Option<String>,
+    pub usb_manufacturer: Option<String>,
 }
 
 /// Merged configuration from CLI args and TOML file.
@@ -98,6 +109,9 @@ pub struct Config {
     pub fit: FitMode,
     pub aspect_ratio: Option<AspectRatio>,
     pub resolution: Option<Resolution>,
+    /// Gadget-wide USB strings to apply while the HID function is attached.
+    pub usb_product: Option<String>,
+    pub usb_manufacturer: Option<String>,
 }
 
 impl Config {
@@ -128,6 +142,8 @@ impl Config {
             fit: cli.fit.unwrap_or(file.fit),
             aspect_ratio: cli.aspect_ratio.or(file.aspect_ratio),
             resolution: cli.resolution.or(file.resolution),
+            usb_product: cli.usb_product.clone().or(file.usb_product),
+            usb_manufacturer: cli.usb_manufacturer.clone().or(file.usb_manufacturer),
         }
     }
 
