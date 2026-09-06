@@ -1,0 +1,14 @@
+[package]
+name = "tigertaild"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rm-pad.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+evdevil.workspace = true
+libc.workspace = true
+log.workspace = true
+serde.workspace = true
+toml.workspace = true

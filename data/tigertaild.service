@@ -1,0 +1,11 @@
+[Unit]
+Description=tigertail USB HID pen daemon
+After=multi-user.target
+
+[Service]
+ExecStart=/home/root/tigertail/tigertaild
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

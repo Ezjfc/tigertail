@@ -1,0 +1,13 @@
+[package]
+name = "tigertail-ui"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# The Qt build needs a cross Qt 5.15 (headers + qmake) in the environment;
+# see NOTES.md. Without it this crate builds as a stub so the workspace
+# stays green.
+qt = ["dep:qmetaobject"]
+
+[dependencies]
+qmetaobject = { version = "0.2", optional = true }
