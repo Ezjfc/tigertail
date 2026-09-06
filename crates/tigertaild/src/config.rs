@@ -24,13 +24,49 @@ pub struct Cli {
     #[arg(long)]
     pub pen_device: Option<String>,
 
-    /// Grab the pen device exclusively (xochitl stops seeing pen input) [default: true]
+    /// Touch input device path
     #[arg(long)]
+    pub touch_device: Option<String>,
+
+    /// Don't forward the pen (the pen device may still be grabbed)
+    #[arg(long)]
+    pub no_pen: bool,
+
+    /// Don't forward touch (the touch device may still be grabbed)
+    #[arg(long)]
+    pub no_touch: bool,
+
+    /// Grab the pen device exclusively so xochitl stops seeing pen input [default: true]
+    #[arg(long, overrides_with = "no_grab_pen")]
+    pub grab_pen: bool,
+
+    /// Don't grab the pen device
+    #[arg(long)]
+    pub no_grab_pen: bool,
+
+    /// Grab the touch device exclusively so xochitl stops seeing touch [default: true]
+    #[arg(long, overrides_with = "no_grab_touch")]
+    pub grab_touch: bool,
+
+    /// Don't grab the touch device
+    #[arg(long)]
+    pub no_grab_touch: bool,
+
+    /// Deprecated alias: grab both pen and touch devices
+    #[arg(long, hide = true)]
     pub grab_input: bool,
 
-    /// Don't grab the pen device (xochitl will also see input)
-    #[arg(long)]
+    /// Deprecated alias: grab neither device
+    #[arg(long, hide = true)]
     pub no_grab_input: bool,
+
+    /// Disable palm rejection (suppressing touch while the pen is down)
+    #[arg(long)]
+    pub no_palm_rejection: bool,
+
+    /// Palm rejection grace period after pen-up, in milliseconds
+    #[arg(long)]
+    pub palm_grace_ms: Option<u64>,
 
     /// Host screen orientation (portrait, landscape-right, landscape-left, inverted)
     #[arg(long, value_parser = clap::value_parser!(Orientation))]
@@ -76,9 +112,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Dump decoded pen frames for debugging (no USB gadget involved)
+    /// Dump decoded pen or touch frames for debugging (no USB gadget involved)
     Dump {
-        /// Device to dump: "pen"
+        /// Device to dump: "pen" or "touch"
         device: String,
     },
 }
@@ -87,7 +123,15 @@ pub enum Command {
 #[serde(deny_unknown_fields, default)]
 pub struct FileConfig {
     pub pen_device: Option<String>,
+    pub touch_device: Option<String>,
+    pub pen: Option<bool>,
+    pub touch: Option<bool>,
+    pub grab_pen: Option<bool>,
+    pub grab_touch: Option<bool>,
+    /// Deprecated alias for both grab_pen and grab_touch.
     pub grab_input: Option<bool>,
+    pub palm_rejection: Option<bool>,
+    pub palm_grace_ms: Option<u64>,
     pub orientation: Orientation,
     pub tilt_correction: TiltCorrectionMode,
     pub tilt_correction_gain: Option<f64>,
@@ -102,7 +146,15 @@ pub struct FileConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub pen_device: String,
-    pub grab_input: bool,
+    pub touch_device: String,
+    /// Forward the pen / touch panel to the host. Independent of grabbing.
+    pub pen: bool,
+    pub touch: bool,
+    /// Grab the pen / touch node away from xochitl. Independent of forwarding.
+    pub grab_pen: bool,
+    pub grab_touch: bool,
+    pub palm_rejection: bool,
+    pub palm_grace_ms: u64,
     pub orientation: Orientation,
     pub tilt_correction: TiltCorrectionMode,
     pub tilt_correction_gain: f64,
@@ -133,11 +185,28 @@ impl Config {
                 .pen_device
                 .clone()
                 .unwrap_or_else(|| file.pen_device.unwrap_or(device.pen_device.into())),
-            grab_input: if cli.no_grab_input {
-                false
-            } else {
-                cli.grab_input || file.grab_input.unwrap_or(true)
-            },
+            touch_device: cli
+                .touch_device
+                .clone()
+                .unwrap_or_else(|| file.touch_device.unwrap_or(device.touch_device.into())),
+            pen: !cli.no_pen && file.pen.unwrap_or(true),
+            touch: !cli.no_touch && file.touch.unwrap_or(true),
+            grab_pen: resolve_grab(
+                cli.grab_pen,
+                cli.no_grab_pen,
+                cli.grab_input,
+                cli.no_grab_input,
+                file.grab_pen.or(file.grab_input),
+            ),
+            grab_touch: resolve_grab(
+                cli.grab_touch,
+                cli.no_grab_touch,
+                cli.grab_input,
+                cli.no_grab_input,
+                file.grab_touch.or(file.grab_input),
+            ),
+            palm_rejection: !cli.no_palm_rejection && file.palm_rejection.unwrap_or(true),
+            palm_grace_ms: cli.palm_grace_ms.or(file.palm_grace_ms).unwrap_or(500),
             orientation: cli.orientation.unwrap_or(file.orientation),
             tilt_correction: cli.tilt_correction.unwrap_or(file.tilt_correction),
             tilt_correction_gain: cli
@@ -153,6 +222,9 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.pen && !self.touch {
+            return Err("Nothing to forward: both pen and touch are disabled");
+        }
         // Aspect ratio and resolution describe the same target two ways; clap
         // rejects both on the CLI, but the file config can still set both.
         if self.aspect_ratio.is_some() && self.resolution.is_some() {
@@ -163,6 +235,31 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// Per-device CLI flags win, then the deprecated `--grab-input` pair, then
+/// the file (per-device key, falling back to the `grab_input` alias), then
+/// the default of grabbing.
+fn resolve_grab(
+    cli_yes: bool,
+    cli_no: bool,
+    alias_yes: bool,
+    alias_no: bool,
+    file: Option<bool>,
+) -> bool {
+    if cli_yes {
+        return true;
+    }
+    if cli_no {
+        return false;
+    }
+    if alias_yes {
+        return true;
+    }
+    if alias_no {
+        return false;
+    }
+    file.unwrap_or(true)
 }
 
 fn load_from_path(path: &Path) -> Result<FileConfig, String> {
@@ -197,7 +294,11 @@ mod tests {
         let example = include_str!("../../../tigertail.toml.example");
         let enabled: String = example
             .lines()
-            .map(|l| l.strip_prefix('#').filter(|r| r.contains(" = ")).unwrap_or(l))
+            .map(|l| {
+                l.strip_prefix('#')
+                    .filter(|r| r.starts_with(|c: char| c.is_ascii_lowercase()) && r.contains(" = "))
+                    .unwrap_or(l)
+            })
             .map(|l| format!("{l}\n"))
             .collect();
         let cfg: FileConfig = toml::from_str(&enabled).unwrap_or_else(|e| panic!("{e}"));

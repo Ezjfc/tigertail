@@ -3,11 +3,25 @@
 #   systemctl restart tigertaild
 # Every key is optional; CLI flags override these values.
 
-# Pen evdev node. Defaults to the detected device profile's.
+# Input nodes. Default to the detected device profile's.
 #pen_device = "/dev/input/event1"
+#touch_device = "/dev/input/event2"
 
-# Grab the pen exclusively so xochitl stops drawing while forwarding.
-grab_input = true
+# What to forward to the host: the pen as a HID pen digitizer, touch as a
+# precision touchpad. Independent of grabbing below.
+pen = true
+touch = true
+
+# Grab each device away from xochitl (it stops reacting to that input).
+# Independent of forwarding: e.g. touch = false + grab_touch = true stops
+# accidental page turns while only the pen is forwarded.
+grab_pen = true
+grab_touch = true
+# Deprecated alias that sets both: grab_input = true
+
+# Suppress touch while the pen is down and for palm_grace_ms after pen-up.
+palm_rejection = true
+#palm_grace_ms = 500
 
 # Host screen orientation relative to the tablet held with buttons at top:
 # portrait, landscape-right, landscape-left, inverted.

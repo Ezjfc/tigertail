@@ -8,16 +8,19 @@
 //! come straight from evdev instead of an SSH stream, and output is
 //! sink-agnostic instead of uinput.
 
+use std::time::Instant;
+
 use evdevil::event::{EventType, InputEvent, Key};
-use evdevil::Evdev;
 
 use rm_pad::device::DeviceProfile;
 use rm_pad::display::SizeData;
 use rm_pad::fit;
+use rm_pad::palm::SharedPalmState;
 use rm_pad::pen_map::{PenInputMap, PenInputPipeline};
 use rm_pad::tilt;
 
 use crate::config::Config;
+use crate::evdev;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -73,22 +76,11 @@ pub trait PenSink {
     fn frame(&mut self, frame: &PenFrame) -> Result<()>;
 }
 
-pub fn run(config: &Config, device: &DeviceProfile, sink: &mut dyn PenSink) -> Result<()> {
-    let evdev = Evdev::open(&config.pen_device)?;
-    log::info!(
-        "Opened pen device {} ({})",
-        config.pen_device,
-        evdev.name().unwrap_or_else(|_| "?".into())
-    );
-
-    if config.grab_input {
-        evdev.grab()?;
-        log::info!("Grabbed pen device exclusively (xochitl sees no pen input)");
-    }
-
-    let orientation = config.orientation;
-    let (seed_x_max, seed_y_max) =
-        orientation.pen_output_dimensions(device.pen_x_max, device.pen_y_max);
+/// The configured pen coordinate pipeline (orientation seed + fit stages).
+fn pipeline(config: &Config, device: &DeviceProfile) -> PenInputPipeline {
+    let (seed_x_max, seed_y_max) = config
+        .orientation
+        .pen_output_dimensions(device.pen_x_max, device.pen_y_max);
 
     let mut maps: Vec<Box<dyn PenInputMap>> = Vec::new();
     let size_data = config
@@ -98,7 +90,30 @@ pub fn run(config: &Config, device: &DeviceProfile, sink: &mut dyn PenSink) -> R
     if let Some(fit_map) = fit::resolve(config.fit, size_data) {
         maps.push(Box::new(fit_map));
     }
-    let pipeline = PenInputPipeline::new(seed_x_max, seed_y_max, maps);
+    PenInputPipeline::new(seed_x_max, seed_y_max, maps)
+}
+
+/// Axis ranges the pen will report, as needed before the gadget attaches.
+pub fn geometry(config: &Config, device: &DeviceProfile) -> PenGeometry {
+    let pipeline = pipeline(config, device);
+    PenGeometry {
+        x_max: pipeline.axis_x_max,
+        y_max: pipeline.axis_y_max,
+        pressure_max: device.pen_pressure_max,
+        distance_max: device.pen_distance_max,
+        tilt_range: device.pen_tilt_range,
+    }
+}
+
+pub fn run(
+    config: &Config,
+    device: &DeviceProfile,
+    sink: &mut dyn PenSink,
+    palm: Option<SharedPalmState>,
+) -> Result<()> {
+    let evdev = evdev::open(&config.pen_device, config.grab_pen, "pen")?;
+
+    let pipeline = pipeline(config, device);
     log::info!("Pen input pipeline: {}", pipeline.describe());
 
     let correction = tilt::resolve(config.tilt_correction, config.tilt_correction_gain);
@@ -106,13 +121,7 @@ pub fn run(config: &Config, device: &DeviceProfile, sink: &mut dyn PenSink) -> R
         log::info!("Pen tilt correction: {} (gain {})", c.mode, c.gain);
     }
 
-    sink.begin(&PenGeometry {
-        x_max: pipeline.axis_x_max,
-        y_max: pipeline.axis_y_max,
-        pressure_max: device.pen_pressure_max,
-        distance_max: device.pen_distance_max,
-        tilt_range: device.pen_tilt_range,
-    })?;
+    sink.begin(&geometry(config, device))?;
 
     // Raw (pre-transform) values pending for the current frame; tilt and
     // distance are not reported every frame, so remember the last values for
@@ -184,6 +193,7 @@ pub fn run(config: &Config, device: &DeviceProfile, sink: &mut dyn PenSink) -> R
                     }
                     frame_count += 1;
 
+                    update_palm_state(&palm, frame.tip);
                     sink.frame(&frame)?;
                 }
                 _ => {}
@@ -239,6 +249,16 @@ fn finish_frame(
         let (otx, oty) = config.orientation.transform_tilt(tx, ty);
         frame.tilt_x = otx;
         frame.tilt_y = oty;
+    }
+}
+
+/// Tell the touch loop whether the pen is down (rm-pad's palm rule).
+fn update_palm_state(palm: &Option<SharedPalmState>, pen_down: bool) {
+    let Some(palm_state) = palm else { return };
+    let Ok(mut state) = palm_state.lock() else { return };
+    state.pen_down = pen_down;
+    if !pen_down {
+        state.last_pen_up = Some(Instant::now());
     }
 }
 

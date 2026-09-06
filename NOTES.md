@@ -64,3 +64,24 @@ the real build, in order of hardness:
    panel directly. Third-party GUI apps conventionally need
    remarkable2-framebuffer (rm2fb) and an e-paper-aware Qt platform plugin.
    Investigate what Toltec's Qt apps (e.g. Oxide) ship and mirror that.
+
+## Touch as a Windows Precision Touchpad (2026-09-06)
+
+- Second HID interface in the same FunctionFS function (f_fs re-maps
+  interface numbers and hands `wIndex` to userspace as the function-local
+  index, so ep0 dispatches per interface; ep files are `ep1` pen, `ep2`
+  touchpad, in descriptor order).
+- Descriptor follows Microsoft's PTP sample: Touch Pad TLC (report ID 1: 5
+  fingers × confidence/tip/contact-id/X/Y with mm physical size, scan time in
+  100 µs, contact count, button 1; feature ID 2 contact-count max + pad type;
+  feature ID 3 the 256-byte certification blob; feature ID 6 latency mode),
+  Configuration TLC (feature ID 4 input mode, ID 5 surface/button switch), and
+  the legacy Mouse TLC (report ID 7, never sent).
+- Feature reports are answered/stored in userspace (`hid/touchpad.rs`
+  `Features`). Linux hid-multitouch sets input mode 3 at probe; Windows does
+  the same when its PTP driver binds.
+- Verified on a Linux host: `PROP=5` (POINTER|BUTTONPAD) touchpad bound by
+  hid-multitouch, listed by Hyprland as `remarkable-<product>-touchpad`.
+- Teardown is deterministic: the ep0 thread is woken with SIGUSR1 and joined
+  before the functionfs mount is unmounted, otherwise `umount` returns EBUSY
+  and `ffs.tigertail` lingers.
