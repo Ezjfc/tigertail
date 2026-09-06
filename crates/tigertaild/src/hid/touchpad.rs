@@ -203,7 +203,11 @@ pub fn pack_report(frame: &TouchFrame, scan_time_100us: u16) -> [u8; INPUT_REPOR
     for (i, c) in frame.contacts.iter().enumerate() {
         let at = 1 + i * CONTACT_LEN;
         // Confidence is always set: the tablet's own palm logic already
-        // decides what reaches the host.
+        // decides what reaches the host. Entries past `count` are ignored by
+        // hosts but zeroed for tidiness.
+        if i >= frame.count as usize {
+            continue;
+        }
         r[at] = 1 | ((c.tip as u8) << 1);
         r[at + 1] = c.id;
         let x = c.x.max(0) as u16;
@@ -357,14 +361,14 @@ mod tests {
     fn packs_two_fingers() {
         let mut f = TouchFrame::default();
         f.contacts[0] = Contact { id: 0, tip: true, x: 0x0102, y: 0x0304 };
-        f.contacts[2] = Contact { id: 2, tip: true, x: 10, y: 20 };
+        f.contacts[1] = Contact { id: 2, tip: false, x: 10, y: 20 }; // lifting
         f.count = 2;
         let r = pack_report(&f, 0xBEEF);
         assert_eq!(r.len(), INPUT_REPORT_LEN);
         assert_eq!(r[0], REPORT_ID_TOUCHPAD);
         assert_eq!(&r[1..7], &[0b11, 0, 0x02, 0x01, 0x04, 0x03]);
-        assert_eq!(&r[7..13], &[0b01, 0, 0, 0, 0, 0]); // slot 1: confident, no tip
-        assert_eq!(&r[13..19], &[0b11, 2, 10, 0, 20, 0]);
+        assert_eq!(&r[7..13], &[0b01, 2, 10, 0, 20, 0]); // reported once with tip cleared
+        assert_eq!(&r[13..19], &[0, 0, 0, 0, 0, 0]); // beyond count: zeroed
         assert_eq!(&r[31..33], &[0xEF, 0xBE]);
         assert_eq!(r[33], 2);
         assert_eq!(r[34], 0);

@@ -51,11 +51,42 @@ pub struct Contact {
 }
 
 /// One oriented touch snapshot, emitted per device frame.
+///
+/// `contacts[..count]` are the contacts reported this frame: the ones
+/// currently down (`tip`), followed by the ones that lifted since the last
+/// emitted frame (`tip == false`, same id and last position). Windows and
+/// Linux hid-multitouch only release a contact when they see it once with
+/// the tip switch cleared; a contact that merely vanishes from the report
+/// stays down until a sticky-finger timeout, which makes rapid taps look
+/// like extra fingers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TouchFrame {
     pub contacts: [Contact; MAX_CONTACTS],
-    /// Number of contacts with `tip` set.
+    /// Number of valid entries in `contacts`, lifted contacts included.
     pub count: u8,
+}
+
+impl TouchFrame {
+    fn contacts(&self) -> &[Contact] {
+        &self.contacts[..self.count as usize]
+    }
+
+    /// Append contacts from `previous` that are no longer down as explicit
+    /// releases, so the host sees each lift exactly once.
+    fn with_releases_from(mut self, previous: &TouchFrame) -> TouchFrame {
+        for old in previous.contacts().iter().filter(|c| c.tip) {
+            if self.contacts().iter().any(|c| c.id == old.id) {
+                continue;
+            }
+            let n = self.count as usize;
+            if n == MAX_CONTACTS {
+                break;
+            }
+            self.contacts[n] = Contact { tip: false, ..*old };
+            self.count += 1;
+        }
+        self
+    }
 }
 
 pub trait TouchSink {
@@ -92,10 +123,6 @@ impl SlotState {
             id: [0; MT_SLOTS],
             next_id: 0,
         }
-    }
-
-    fn active_count(&self) -> usize {
-        self.active.iter().filter(|&&a| a).count()
     }
 
     fn begin_touch(&mut self, slot: usize) {
@@ -148,11 +175,12 @@ pub fn run(
                     resolve_pending_positions(&mut slots, &frame_state);
                     frame_state.pending_positions.clear();
 
-                    let frame = if should_suppress_palm(&palm, config.palm_grace_ms) {
+                    let down = if should_suppress_palm(&palm, config.palm_grace_ms) {
                         TouchFrame::default()
                     } else {
                         build_frame(&slots, device, orientation, &geo)
                     };
+                    let frame = down.with_releases_from(&last_sent);
 
                     if frame_count == 0 {
                         log::info!("Touch events flowing");
@@ -334,6 +362,39 @@ mod tests {
         assert_eq!(b.count, 1);
         assert_ne!(b.contacts[0].id, first_id, "a new touch must not inherit the old contact id");
         assert!(b.contacts[0].tip);
+    }
+
+    #[test]
+    fn a_lifted_contact_is_reported_once_with_tip_cleared() {
+        let mut slots = SlotState::new();
+        let mut fs = FrameState { current_slot: 0, pending_positions: Vec::new() };
+        let down = feed(&mut slots, &mut fs, &[(ABS_MT_TRACKING_ID, 7), (ABS_MT_POSITION_X, 100), (ABS_MT_POSITION_Y, 200)]);
+        let id = down.contacts[0].id;
+
+        let lifted = feed(&mut slots, &mut fs, &[(ABS_MT_TRACKING_ID, -1)]).with_releases_from(&down);
+        assert_eq!(lifted.count, 1);
+        assert_eq!(lifted.contacts[0].id, id);
+        assert!(!lifted.contacts[0].tip);
+        assert_eq!((lifted.contacts[0].x, lifted.contacts[0].y), (down.contacts[0].x, down.contacts[0].y));
+
+        // Next frame: the release is not repeated.
+        let quiet = feed(&mut slots, &mut fs, &[]).with_releases_from(&lifted);
+        assert_eq!(quiet.count, 0);
+    }
+
+    #[test]
+    fn one_of_two_fingers_lifting_keeps_the_other_and_releases_the_first() {
+        let mut slots = SlotState::new();
+        let mut fs = FrameState { current_slot: 0, pending_positions: Vec::new() };
+        let both = feed(&mut slots, &mut fs, &[
+            (ABS_MT_SLOT, 0), (ABS_MT_TRACKING_ID, 1), (ABS_MT_POSITION_X, 10), (ABS_MT_POSITION_Y, 10),
+            (ABS_MT_SLOT, 1), (ABS_MT_TRACKING_ID, 2), (ABS_MT_POSITION_X, 500), (ABS_MT_POSITION_Y, 500),
+        ]);
+        assert_eq!(both.count, 2);
+        let after = feed(&mut slots, &mut fs, &[(ABS_MT_SLOT, 0), (ABS_MT_TRACKING_ID, -1)]).with_releases_from(&both);
+        assert_eq!(after.count, 2);
+        assert!(after.contacts[0].tip && after.contacts[0].id == both.contacts[1].id);
+        assert!(!after.contacts[1].tip && after.contacts[1].id == both.contacts[0].id);
     }
 
     #[test]

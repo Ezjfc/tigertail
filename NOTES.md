@@ -85,3 +85,19 @@ the real build, in order of hardness:
 - Teardown is deterministic: the ep0 thread is woken with SIGUSR1 and joined
   before the functionfs mount is unmounted, otherwise `umount` returns EBUSY
   and `ffs.tigertail` lingers.
+
+### Host semantics that bit us (fixed 2026-09-07)
+
+- **Contact ids are per touch, not per slot.** The panel driver reuses slot
+  0 for the next finger and may deliver one finger's release and the next
+  finger's press in the same evdev frame; with id = slot the host saw one
+  contact teleport (libinput: motion, tap cancelled).
+- **A lifted contact must be reported once with tip = 0.** Windows-8-class
+  devices in hid-multitouch (`MT_CLS_WIN_8`) have no `INPUT_MT_DROP_UNUSED`;
+  a contact that just vanishes from the report stays down until the 100 ms
+  sticky-finger timer. Symptoms: laggy taps, rapid taps becoming two-finger
+  gestures, two-finger scroll broken after any momentary lift.
+- **Scan time must change between reports**, or hid-multitouch treats the
+  report as a hybrid-mode continuation packet and ignores its contact count.
+- Active contacts are packed first; hosts only look at the first
+  `contact count` finger collections of a parallel-mode report.

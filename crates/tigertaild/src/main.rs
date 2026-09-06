@@ -40,8 +40,10 @@ fn main() -> Result<()> {
         let result = match which.as_str() {
             "pen" => pen::run(&config, device, &mut pen::DumpSink, None),
             "touch" => touch::run(&config, device, &mut touch::DumpSink::new(), None),
+            "raw-pen" => evdev::dump_raw(&config.pen_device, config.grab_pen, "pen"),
+            "raw-touch" => evdev::dump_raw(&config.touch_device, config.grab_touch, "touch"),
             _ => {
-                eprintln!("Unknown dump device: {}. Use 'pen' or 'touch'.", which);
+                eprintln!("Unknown dump device: {}. Use 'pen', 'touch', 'raw-pen' or 'raw-touch'.", which);
                 std::process::exit(1);
             }
         };
@@ -146,7 +148,7 @@ fn run_gadget(config: Config, device: &'static DeviceProfile) -> Result<()> {
         let sink = gadget.sink(i);
         let (config, palm) = (config.clone(), palm.clone());
         workers.push(spawn_worker("touch", move || {
-            let mut sink = TouchHidSink { sink, start: Instant::now() };
+            let mut sink = TouchHidSink { sink, start: Instant::now(), last_scan: 0 };
             touch::run(&config, device, &mut sink, palm)
         }));
     } else if config.grab_touch {
@@ -209,6 +211,7 @@ impl PenSink for PenHidSink {
 struct TouchHidSink {
     sink: ReportSink,
     start: Instant,
+    last_scan: u16,
 }
 
 impl TouchSink for TouchHidSink {
@@ -216,8 +219,15 @@ impl TouchSink for TouchHidSink {
         Ok(())
     }
     fn frame(&mut self, frame: &TouchFrame) -> Result<()> {
-        // PTP scan time: 100 µs units, free-running, wraps at 16 bits.
-        let scan = (self.start.elapsed().as_micros() / 100) as u16;
+        // PTP scan time: 100 µs units, free-running, wraps at 16 bits. It
+        // must differ between consecutive reports: hid-multitouch treats a
+        // report with an unchanged scan time as a continuation packet and
+        // ignores its contact count.
+        let mut scan = (self.start.elapsed().as_micros() / 100) as u16;
+        if scan == self.last_scan {
+            scan = scan.wrapping_add(1);
+        }
+        self.last_scan = scan;
         self.sink.send(&hid::touchpad::pack_report(frame, scan))
     }
 }

@@ -114,7 +114,7 @@ pub struct Cli {
 pub enum Command {
     /// Dump decoded pen or touch frames for debugging (no USB gadget involved)
     Dump {
-        /// Device to dump: "pen" or "touch"
+        /// Device to dump: "pen", "touch" (decoded frames), "raw-pen", "raw-touch" (evdev events)
         device: String,
     },
 }
