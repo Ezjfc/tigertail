@@ -31,7 +31,7 @@ rustPlatform.buildRustPackage {
     # The rm-pad transform library is a git dependency; its hash must be
     # bumped whenever the pinned rev changes.
     outputHashes = {
-      "rm-pad-0.1.0" = "sha256-wcyGn05Gbapht0dGFE/aLLbVpPiIaPM8jHA77Cv8MbA=";
+      "rm-pad-0.1.0" = "sha256-sUxZzxP/vbfnxqIoT4p7f9wD/CmqlpaX9gkZtmENmUM=";
     };
   };
 

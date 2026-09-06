@@ -449,7 +449,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rm-pad"
 version = "0.1.0"
-source = "git+https://github.com/Endermanbugzjfc/rm-pad.git?rev=f0e3d8f5b5832ed55d32cc2754e9118a73a75194#f0e3d8f5b5832ed55d32cc2754e9118a73a75194"
+source = "git+https://github.com/Endermanbugzjfc/rm-pad.git?rev=a42533110198d09fc4b44b07610c2adc08793a94#a42533110198d09fc4b44b07610c2adc08793a94"
 dependencies = [
  "log",
  "serde",

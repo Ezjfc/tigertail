@@ -8,7 +8,7 @@ edition = "2021"
 
 [workspace.dependencies]
 # Portable transform pipeline shared with the host-side rm-pad project.
-rm-pad = { git = "https://github.com/Endermanbugzjfc/rm-pad.git", rev = "f0e3d8f5b5832ed55d32cc2754e9118a73a75194", default-features = false }
+rm-pad = { git = "https://github.com/Endermanbugzjfc/rm-pad.git", rev = "a42533110198d09fc4b44b07610c2adc08793a94", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 env_logger = "0.11"
 evdevil = "0.4.0"

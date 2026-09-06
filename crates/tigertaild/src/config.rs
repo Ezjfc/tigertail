@@ -115,15 +115,20 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load(cli: &Cli, device: &DeviceProfile) -> Self {
-        let file = cli
-            .config
-            .as_ref()
-            .and_then(|p| load_from_path(p))
-            .or_else(load_from_default_paths)
-            .unwrap_or_default();
+    pub fn load(cli: &Cli, device: &DeviceProfile) -> Result<Self, String> {
+        let file = match cli.config.as_ref() {
+            // An explicit config path that exists but does not parse is a
+            // hard error: silently running with defaults would hide a broken
+            // GUI-written file behind a working-looking pen.
+            Some(path) if path.exists() => load_from_path(path)?,
+            Some(path) => {
+                log::info!("No config at {}; using defaults", path.display());
+                FileConfig::default()
+            }
+            None => load_from_default_paths().unwrap_or_default(),
+        };
 
-        Self {
+        Ok(Self {
             pen_device: cli
                 .pen_device
                 .clone()
@@ -144,7 +149,7 @@ impl Config {
             resolution: cli.resolution.or(file.resolution),
             usb_product: cli.usb_product.clone().or(file.usb_product),
             usb_manufacturer: cli.usb_manufacturer.clone().or(file.usb_manufacturer),
-        }
+        })
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -160,31 +165,46 @@ impl Config {
     }
 }
 
-fn load_from_path(path: &Path) -> Option<FileConfig> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(e) => {
-            log::info!("No config at {} ({}); using defaults", path.display(), e);
-            return None;
-        }
-    };
-    match toml::from_str(&content) {
-        Ok(config) => {
-            log::info!("Loaded config from {}", path.display());
-            Some(config)
-        }
-        Err(e) => {
-            log::warn!("Failed to parse {}: {}", path.display(), e);
-            None
-        }
-    }
+fn load_from_path(path: &Path) -> Result<FileConfig, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("reading {}: {}", path.display(), e))?;
+    let config = toml::from_str(&content)
+        .map_err(|e| format!("invalid config {}:\n{}", path.display(), e))?;
+    log::info!("Loaded config from {}", path.display());
+    Ok(config)
 }
 
 fn load_from_default_paths() -> Option<FileConfig> {
     default_config_paths()
         .iter()
         .filter(|p| p.exists())
-        .find_map(|p| load_from_path(p))
+        .find_map(|p| match load_from_path(p) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                log::warn!("{}; trying next location", e);
+                None
+            }
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shipped example must parse with every commented key enabled.
+    #[test]
+    fn example_config_parses_with_all_keys_enabled() {
+        let example = include_str!("../../../tigertail.toml.example");
+        let enabled: String = example
+            .lines()
+            .map(|l| l.strip_prefix('#').filter(|r| r.contains(" = ")).unwrap_or(l))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let cfg: FileConfig = toml::from_str(&enabled).unwrap_or_else(|e| panic!("{e}"));
+        assert!(cfg.aspect_ratio.is_some());
+        assert!(cfg.resolution.is_some());
+        assert_eq!(cfg.usb_product.as_deref(), Some("tigertail"));
+    }
 }
 
 fn default_config_paths() -> Vec<PathBuf> {

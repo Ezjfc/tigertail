@@ -18,7 +18,10 @@ fn main() -> Result<()> {
         .init();
 
     let device = detect_device()?;
-    let config = Config::load(&cli, device);
+    let config = Config::load(&cli, device).unwrap_or_else(|msg| {
+        eprintln!("Error: {}", msg);
+        std::process::exit(1);
+    });
 
     if let Err(msg) = config.validate() {
         eprintln!("Error: {}", msg);
