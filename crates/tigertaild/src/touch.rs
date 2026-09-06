@@ -74,15 +74,40 @@ struct SlotState {
     x: [Option<i32>; MT_SLOTS],
     y: [Option<i32>; MT_SLOTS],
     active: [bool; MT_SLOTS],
+    /// Host-facing contact id per slot. A fresh id is issued for every new
+    /// touch, because the driver reuses slots: when one finger's release and
+    /// the next finger's press land in the same evdev frame, reusing the
+    /// slot index as the id makes the host see one contact teleporting
+    /// (which libinput turns into cursor motion instead of a tap).
+    id: [u8; MT_SLOTS],
+    next_id: u8,
 }
 
 impl SlotState {
     fn new() -> Self {
-        Self { x: [None; MT_SLOTS], y: [None; MT_SLOTS], active: [false; MT_SLOTS] }
+        Self {
+            x: [None; MT_SLOTS],
+            y: [None; MT_SLOTS],
+            active: [false; MT_SLOTS],
+            id: [0; MT_SLOTS],
+            next_id: 0,
+        }
     }
 
     fn active_count(&self) -> usize {
         self.active.iter().filter(|&&a| a).count()
+    }
+
+    fn begin_touch(&mut self, slot: usize) {
+        self.active[slot] = true;
+        self.id[slot] = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+    }
+
+    fn end_touch(&mut self, slot: usize) {
+        self.active[slot] = false;
+        self.x[slot] = None;
+        self.y[slot] = None;
     }
 }
 
@@ -155,22 +180,25 @@ fn process_abs_event(slots: &mut SlotState, frame: &mut FrameState, code: u16, v
         ABS_MT_TRACKING_ID => {
             let slot = frame.current_slot;
             if value >= 0 {
-                slots.active[slot] = true;
+                // Always a new touch, even if the slot was still active.
+                slots.begin_touch(slot);
             } else {
-                slots.active[slot] = false;
-                slots.x[slot] = None;
-                slots.y[slot] = None;
+                slots.end_touch(slot);
             }
         }
         ABS_MT_POSITION_X => {
             let slot = frame.current_slot;
             slots.x[slot] = Some(value);
-            slots.active[slot] = true;
+            if !slots.active[slot] {
+                slots.begin_touch(slot);
+            }
         }
         ABS_MT_POSITION_Y => {
             let slot = frame.current_slot;
             slots.y[slot] = Some(value);
-            slots.active[slot] = true;
+            if !slots.active[slot] {
+                slots.begin_touch(slot);
+            }
             if let Some(x) = slots.x[slot] {
                 frame.pending_positions.push((x, value));
             }
@@ -193,6 +221,9 @@ fn resolve_pending_positions(slots: &mut SlotState, frame: &FrameState) {
     }
 }
 
+/// Active contacts are packed as the first `count` entries: hosts (Linux
+/// hid-multitouch in particular) only process the first `count` finger
+/// collections of a parallel-mode report.
 fn build_frame(
     slots: &SlotState,
     device: &DeviceProfile,
@@ -200,12 +231,15 @@ fn build_frame(
     geo: &TouchGeometry,
 ) -> TouchFrame {
     let mut frame = TouchFrame::default();
-    for slot in 0..MAX_CONTACTS {
-        let contact = &mut frame.contacts[slot];
-        contact.id = slot as u8;
-        let (Some(x), Some(y)) = (slots.x[slot], slots.y[slot]) else { continue };
+    let mut n = 0;
+    for slot in 0..MT_SLOTS {
         if !slots.active[slot] {
             continue;
+        }
+        let (Some(x), Some(y)) = (slots.x[slot], slots.y[slot]) else { continue };
+        if n == MAX_CONTACTS {
+            log::debug!("More than {} contacts; extra slots ignored", MAX_CONTACTS);
+            break;
         }
         let (ox, oy) = orientation.transform_touch(
             x.clamp(0, device.touch_x_max),
@@ -213,14 +247,15 @@ fn build_frame(
             device.touch_x_max,
             device.touch_y_max,
         );
-        contact.tip = true;
-        contact.x = ox.clamp(0, geo.x_max);
-        contact.y = oy.clamp(0, geo.y_max);
-        frame.count += 1;
+        frame.contacts[n] = Contact {
+            id: slots.id[slot],
+            tip: true,
+            x: ox.clamp(0, geo.x_max),
+            y: oy.clamp(0, geo.y_max),
+        };
+        n += 1;
     }
-    if slots.active_count() > MAX_CONTACTS {
-        log::debug!("More than {} contacts; extra slots ignored", MAX_CONTACTS);
-    }
+    frame.count = n as u8;
     frame
 }
 
@@ -267,5 +302,48 @@ impl TouchSink for DumpSink {
             contacts.join(" ")
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rm_pad::device::RM2;
+
+    fn feed(slots: &mut SlotState, frame: &mut FrameState, events: &[(u16, i32)]) -> TouchFrame {
+        for &(code, value) in events {
+            process_abs_event(slots, frame, code, value);
+        }
+        resolve_pending_positions(slots, frame);
+        frame.pending_positions.clear();
+        let geo = TouchGeometry { x_max: RM2.touch_x_max, y_max: RM2.touch_y_max, resolution: 9 };
+        build_frame(slots, &RM2, Orientation::Portrait, &geo)
+    }
+
+    #[test]
+    fn release_and_press_in_one_frame_yields_a_new_contact_id() {
+        let mut slots = SlotState::new();
+        let mut fs = FrameState { current_slot: 0, pending_positions: Vec::new() };
+
+        let a = feed(&mut slots, &mut fs, &[(ABS_MT_SLOT, 0), (ABS_MT_TRACKING_ID, 10), (ABS_MT_POSITION_X, 100), (ABS_MT_POSITION_Y, 200)]);
+        assert_eq!(a.count, 1);
+        let first_id = a.contacts[0].id;
+
+        // The driver reuses slot 0: release + new press before one SYN.
+        let b = feed(&mut slots, &mut fs, &[(ABS_MT_TRACKING_ID, -1), (ABS_MT_TRACKING_ID, 11), (ABS_MT_POSITION_X, 900), (ABS_MT_POSITION_Y, 1500)]);
+        assert_eq!(b.count, 1);
+        assert_ne!(b.contacts[0].id, first_id, "a new touch must not inherit the old contact id");
+        assert!(b.contacts[0].tip);
+    }
+
+    #[test]
+    fn active_contacts_are_packed_first() {
+        let mut slots = SlotState::new();
+        let mut fs = FrameState { current_slot: 0, pending_positions: Vec::new() };
+        // Only slot 1 is down.
+        let f = feed(&mut slots, &mut fs, &[(ABS_MT_SLOT, 1), (ABS_MT_TRACKING_ID, 5), (ABS_MT_POSITION_X, 10), (ABS_MT_POSITION_Y, 20)]);
+        assert_eq!(f.count, 1);
+        assert!(f.contacts[0].tip, "the single active contact must be entry 0");
+        assert!(!f.contacts[1].tip);
     }
 }

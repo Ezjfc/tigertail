@@ -63,7 +63,7 @@ pub fn report_descriptor(geo: &TouchGeometry) -> Vec<u8> {
             0x95, 0x01, //     Report Count (1)
             0x75, 0x06, //     Report Size (6)
             0x81, 0x03, //     Input (Const) — pad
-            0x25, (MAX_CONTACTS - 1) as u8, // Logical Maximum
+            0x26, 0xFF, 0x00, // Logical Maximum (255): ids are per touch, not per slot
             0x09, 0x51, //     Usage (Contact Identifier)
             0x75, 0x08, //     Report Size (8)
             0x81, 0x02, //     Input (Data,Var,Abs)
